@@ -1,6 +1,6 @@
 # dlss_mfg_sm86
 
-Fills the gaps between [dlssg_sm86](../README.en.md) and multi-frame generation.
+Fills the gaps between [dlssg_sm86](../externals/dlssg_for_sm86/README.en.md) and multi-frame generation.
 dlssg_sm86 makes DLSS Frame Generation run on RTX 30/20, but it only does what the
 game asks for — and most games only ask for 2x, or have no MFG setting at all.
 dlss_mfg_sm86 rewrites the game's own frame generation requests so the main mod

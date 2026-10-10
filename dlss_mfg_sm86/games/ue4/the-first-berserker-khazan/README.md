@@ -14,7 +14,7 @@ Back up every file you replace first.
 | `mod\BBQ\Binaries\Win64\winmm.dll` | `BBQ\Binaries\Win64\` | dlss_mfg_sm86 proxy |
 | `mod\BBQ\Binaries\Win64\dlss_mfg_sm86.ini` | `BBQ\Binaries\Win64\` | MFG mode (Mode 1, Dynamic MFG) |
 | `mod\BBQ\Binaries\Win64\dlssg_sm86.ini` | `BBQ\Binaries\Win64\` | dlssg_sm86 settings (`Optimized=3`, 4x ceiling) |
-| `version.dll` from the [fork root](../../../../version.dll) | `BBQ\Binaries\Win64\` | dlssg_sm86 itself |
+| `version.dll` from the [dlssg_for_sm86](../../../../externals/dlssg_for_sm86/version.dll) | `BBQ\Binaries\Win64\` | dlssg_sm86 itself |
 | Streamline SDK 2.14.1 `bin\x64`: the eight runtime DLLs | `Engine\Plugins\Runtime\Nvidia\Streamline\Binaries\ThirdParty\Win64\` | **required**: Khazan ships 2.4.15, which has no multi-frame code ([UE5 notes](../../ue5/README.md)) |
 
 `winmm.dll` is a static import of `BBQ-Win64-Shipping.exe`.

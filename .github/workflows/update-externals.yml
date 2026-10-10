@@ -1,0 +1,33 @@
+name: Update externals
+
+# Projects by others live as submodules under externals/. GitHub sends no event
+# when they push, so poll; when one has moved, commit its new pointer.
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-externals
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Move submodules to their upstream heads
+        run: |
+          git submodule update --remote
+          if git diff --quiet; then echo 'externals up to date'; exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          summary=$(git submodule foreach --quiet 'cd "$toplevel"; if ! git diff --quiet -- "$sm_path"; then echo "$name $(git -C "$sm_path" log -1 --format="%h %s")"; fi')
+          git commit -am "externals: update" -m "$summary"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git log -1 --format=%B

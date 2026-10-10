@@ -13,7 +13,7 @@ Back up every file you replace first.
 | `mod\NINJAGAIDEN2BLACK\Binaries\Win64\winmm.dll` | `NINJAGAIDEN2BLACK\Binaries\Win64\` | dlss_mfg_sm86 proxy |
 | `mod\NINJAGAIDEN2BLACK\Binaries\Win64\dlss_mfg_sm86.ini` | `NINJAGAIDEN2BLACK\Binaries\Win64\` | MFG mode (Mode 1, Dynamic MFG) |
 | `mod\NINJAGAIDEN2BLACK\Binaries\Win64\dlssg_sm86.ini` | `NINJAGAIDEN2BLACK\Binaries\Win64\` | dlssg_sm86 settings (`Optimized=3`, 4x ceiling) |
-| `version.dll` from the [fork root](../../../../version.dll) | `NINJAGAIDEN2BLACK\Binaries\Win64\` | dlssg_sm86 itself |
+| `version.dll` from the [dlssg_for_sm86](../../../../externals/dlssg_for_sm86/version.dll) | `NINJAGAIDEN2BLACK\Binaries\Win64\` | dlssg_sm86 itself |
 | Streamline SDK 2.14.1 `bin\x64`: the eight runtime DLLs | `NINJAGAIDEN2BLACK\Plugins\Streamline\Binaries\ThirdParty\Win64\` | **required**: NG2B ships 2.4.15, which has no multi-frame code ([UE5 notes](../README.md)) |
 
 `winmm.dll` is a static import of `NINJAGAIDEN2BLACK-Win64-Shipping.exe`.

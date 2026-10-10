@@ -20,7 +20,7 @@ Back up every file you replace first.
 | `mod\winmm.dll` | game folder | dlss_mfg_sm86 proxy |
 | `mod\dlss_mfg_sm86.ini` | game folder | MFG mode (Mode 1, Dynamic MFG; Mode 2 set to 3x at 120 Hz) |
 | `mod\dlssg_sm86.ini` | game folder | dlssg_sm86 settings (`Optimized=3`, 4x ceiling) |
-| `alternatives\dinput8.dll` from the [fork root](../../../../alternatives/) | game folder | dlssg_sm86 itself |
+| `alternatives\dinput8.dll` from the [dlssg_for_sm86](../../../../externals/dlssg_for_sm86/alternatives/) | game folder | dlssg_sm86 itself |
 | Streamline SDK 2.14.1 `bin\x64`: `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.dlss.dll`, `sl.pcl.dll`, `sl.reflex.dll`, `nvngx_dlssg.dll` | game folder | **required**: the game ships 2.4.15, which has no multi-frame code ([Katana notes](../README.md)) |
 
 `Ronin.exe` statically imports `winmm`, `dinput8` and `dbghelp` but not `version`,

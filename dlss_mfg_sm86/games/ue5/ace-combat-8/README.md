@@ -22,7 +22,7 @@ Back up every file you replace first.
 | `mod\ac8_bootstrap.ini` | `ac8_bootstrap.ini` | bootstrap settings |
 | `mod\Game\Binaries\Win64\dinput8.dll` | `Game\Binaries\Win64\` | dlss_mfg_sm86 proxy |
 | `mod\Game\Binaries\Win64\dlss_mfg_sm86.ini` | `Game\Binaries\Win64\` | MFG mode |
-| `version.dll` from the [fork root](../../../../version.dll) | `Game\Binaries\Win64\` | dlssg_sm86 itself; the bootstrap writes its `dlssg_sm86.ini` from `[SM86.*]` |
+| `version.dll` from the [dlssg_for_sm86](../../../../externals/dlssg_for_sm86/version.dll) | `Game\Binaries\Win64\` | dlssg_sm86 itself; the bootstrap writes its `dlssg_sm86.ini` from `[SM86.*]` |
 
 Requirements:
 
