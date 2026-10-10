@@ -9,7 +9,6 @@ under [`externals/`](externals).
 | [`dlss_mfg_sm86/`](dlss_mfg_sm86/README.md) | Dynamic multi-frame generation on top of dlssg_sm86, for any Streamline DLSS-G game, with per-game mods (ACE COMBAT 8, Halo: Campaign Evolved, Ninja Gaiden 2 Black, ...) under [`games/`](dlss_mfg_sm86/games) |
 | [`game_startup/`](game_startup/README.md) | Startup fixes loaded through a proxy DLL (Immortals of Aveum) |
 | [`externals/dlssg_for_sm86/`](https://github.com/sdli1995/dlssg_for_sm86) | [sdli1995/dlssg_for_sm86](https://github.com/sdli1995/dlssg_for_sm86): DLSS Frame Generation on RTX 30 (SM86) and RTX 20 (SM75), which dlss_mfg_sm86 needs (`version.dll`, `alternatives\`, [INI reference](externals/dlssg_for_sm86/docs/INSTALL.en.md)) |
-| [`docs/dlssg_for_sm86/`](docs/dlssg_for_sm86) | English translations of dlssg_for_sm86 docs that exist only in Chinese, mirroring their paths there; maintained by hand and can lag behind |
 
 ## dlss_mfg_sm86
 
