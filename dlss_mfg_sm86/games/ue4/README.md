@@ -8,4 +8,5 @@ switch. The differences are cosmetic: UE4 keeps its user settings under
 
 ## Games
 
+- [Ghostrunner 2](ghostrunner-2/README.md) (UE 4.27)
 - [The First Berserker: Khazan](the-first-berserker-khazan/README.md) (UE 4.27)

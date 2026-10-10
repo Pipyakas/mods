@@ -39,6 +39,7 @@ a bootstrap that turns FG on through Engine.ini (see ACE COMBAT 8).
 - [ACE COMBAT 8](ace-combat-8/README.md)
 - [Ninja Gaiden 2 Black](ninja-gaiden-2-black/README.md)
 - [Halo: Campaign Evolved](halo-campaign-evolved/README.md)
+- [Immortals of Aveum](immortals-of-aveum/README.md)
 To add a game that needs more than the generic install: create `games/ue5/<game>/` with a README (requirements, install table,
 quirks) and a `mod/` folder mirroring the game's paths, add the game's proxy copy
 to `build.cmd`, and list it in the project README.

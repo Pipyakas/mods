@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <intrin.h>
 
 // ac8_bootstrap.ini sits beside this launcher in the game root.
 #define AC8_CONFIG_NAME L"ac8_bootstrap.ini"
@@ -103,8 +104,106 @@ static BOOL ConfigureEngine(const WCHAR* engineIniPath, const WCHAR* configPath)
     return TRUE;
 }
 
+// The offline-mode module (offline/ac8_offline.cpp: SkipIntro, HideOnlineMenu),
+// embedded as an RCDATA resource and mapped into the suspended game here, so no
+// file is written or loaded by name: sections copied, relocations applied,
+// imports bound, protections set, then its ac8_start runs as an APC on the
+// game's main thread when that thread starts, before the game's own code. Its
+// imports must come from kernel32.dll, which (with the DLLs it forwards to) sits
+// at the same address in every process of a session.
+#define AC8_OFFLINE_RESOURCE 101
+static void CopyBytes(BYTE* to, const BYTE* from, SIZE_T count) { __movsb(to, from, count); }
+static BOOL Equal(const char* a, const char* b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
+
+static BOOL MapOfflineModule(HANDLE process, HANDLE thread) {
+    HRSRC resource = FindResourceW(NULL, MAKEINTRESOURCEW(AC8_OFFLINE_RESOURCE), (LPCWSTR)RT_RCDATA);
+    HGLOBAL loaded = resource ? LoadResource(NULL, resource) : NULL;
+    const BYTE* file = loaded ? (const BYTE*)LockResource(loaded) : NULL;
+    DWORD fileSize = resource ? SizeofResource(NULL, resource) : 0;
+    if (!file || fileSize < sizeof(IMAGE_DOS_HEADER)) return FALSE;
+    const IMAGE_NT_HEADERS64* nt = (const IMAGE_NT_HEADERS64*)(file + ((const IMAGE_DOS_HEADER*)file)->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) return FALSE;
+    const IMAGE_OPTIONAL_HEADER64* header = &nt->OptionalHeader;
+    if (header->DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size) return FALSE; // thread-local data is not set up
+    SIZE_T size = header->SizeOfImage;
+    BYTE* image = (BYTE*)VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    BYTE* remote = (BYTE*)VirtualAllocEx(process, NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    BOOL ok = image && remote;
+    const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
+    if (ok) {
+        CopyBytes(image, file, header->SizeOfHeaders);
+        for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+            DWORD raw = sections[i].SizeOfRawData < sections[i].Misc.VirtualSize ? sections[i].SizeOfRawData : sections[i].Misc.VirtualSize;
+            if (sections[i].PointerToRawData + raw > fileSize || sections[i].VirtualAddress + raw > size) ok = FALSE;
+            else CopyBytes(image + sections[i].VirtualAddress, file + sections[i].PointerToRawData, raw);
+        }
+    }
+    // Base relocations (64-bit absolute only).
+    const IMAGE_DATA_DIRECTORY* relocations = &header->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+    ULONGLONG delta = (ULONGLONG)remote - header->ImageBase;
+    for (DWORD at = 0; ok && at + sizeof(IMAGE_BASE_RELOCATION) <= relocations->Size;) {
+        const IMAGE_BASE_RELOCATION* block = (const IMAGE_BASE_RELOCATION*)(image + relocations->VirtualAddress + at);
+        if (block->SizeOfBlock < sizeof(IMAGE_BASE_RELOCATION)) break;
+        const WORD* entries = (const WORD*)(block + 1);
+        for (DWORD k = 0; k < (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD); k++) {
+            if ((entries[k] >> 12) == IMAGE_REL_BASED_DIR64) *(ULONGLONG*)(image + block->VirtualAddress + (entries[k] & 0xFFF)) += delta;
+            else if ((entries[k] >> 12) != IMAGE_REL_BASED_ABSOLUTE) ok = FALSE;
+        }
+        at += block->SizeOfBlock;
+    }
+    // Imports, bound to this process's kernel32 (the same in the game).
+    const IMAGE_DATA_DIRECTORY* imports = &header->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    for (const IMAGE_IMPORT_DESCRIPTOR* d = (const IMAGE_IMPORT_DESCRIPTOR*)(image + imports->VirtualAddress);
+         ok && imports->Size && d->Name; d++) {
+        if (GetModuleHandleA((const char*)(image + d->Name)) != kernel32) { ok = FALSE; break; }
+        const ULONGLONG* names = (const ULONGLONG*)(image + (d->OriginalFirstThunk ? d->OriginalFirstThunk : d->FirstThunk));
+        ULONGLONG* slots = (ULONGLONG*)(image + d->FirstThunk);
+        for (; ok && *names; names++, slots++) {
+            FARPROC function = IMAGE_SNAP_BY_ORDINAL64(*names) ? GetProcAddress(kernel32, (LPCSTR)IMAGE_ORDINAL64(*names))
+                : GetProcAddress(kernel32, ((const IMAGE_IMPORT_BY_NAME*)(image + (DWORD)*names))->Name);
+            if (function) *slots = (ULONGLONG)function; else ok = FALSE;
+        }
+    }
+    // The entry point, an export.
+    ULONGLONG start = 0;
+    const IMAGE_DATA_DIRECTORY* exports = &header->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (ok && exports->Size) {
+        const IMAGE_EXPORT_DIRECTORY* e = (const IMAGE_EXPORT_DIRECTORY*)(image + exports->VirtualAddress);
+        const DWORD* names = (const DWORD*)(image + e->AddressOfNames);
+        const WORD* ordinals = (const WORD*)(image + e->AddressOfNameOrdinals);
+        const DWORD* functions = (const DWORD*)(image + e->AddressOfFunctions);
+        for (DWORD i = 0; i < e->NumberOfNames && !start; i++)
+            if (Equal((const char*)(image + names[i]), "ac8_start")) start = (ULONGLONG)remote + functions[ordinals[i]];
+    }
+    SIZE_T written = 0;
+    ok = ok && start && WriteProcessMemory(process, remote, image, size, &written) && written == size;
+    DWORD old;
+    if (ok) ok = VirtualProtectEx(process, remote, header->SizeOfHeaders, PAGE_READONLY, &old);
+    for (WORD i = 0; ok && i < nt->FileHeader.NumberOfSections; i++) {
+        DWORD c = sections[i].Characteristics;
+        DWORD protect = (c & IMAGE_SCN_MEM_EXECUTE) ? PAGE_EXECUTE_READ : (c & IMAGE_SCN_MEM_WRITE) ? PAGE_READWRITE : PAGE_READONLY;
+        if (sections[i].Misc.VirtualSize) ok = VirtualProtectEx(process, remote + sections[i].VirtualAddress, sections[i].Misc.VirtualSize, protect, &old);
+    }
+    if (ok) ok = FlushInstructionCache(process, remote, size) && QueueUserAPC((PAPCFUNC)start, thread, (ULONG_PTR)remote);
+    if (image) VirtualFree(image, 0, MEM_RELEASE);
+    if (!ok && remote) VirtualFreeEx(process, remote, 0, MEM_RELEASE);
+    return ok;
+}
+
+// [Debug] UE4SS=1: UE4SS (Game\Binaries\Win64\ue4ss\UE4SS.dll), loaded by name
+// (LoadLibraryW as an APC on the same thread), for inspecting the game while
+// mods are made. Off by default; the folder can stay installed.
+static void LoadDebugModule(HANDLE process, HANDLE thread, const WCHAR* path) {
+    SIZE_T bytes = (lstrlenW(path) + 1) * sizeof(WCHAR), written = 0;
+    void* remote = VirtualAllocEx(process, NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    void* load = (void*)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW");
+    if (remote && load && WriteProcessMemory(process, remote, path, bytes, &written) && written == bytes)
+        QueueUserAPC((PAPCFUNC)load, thread, (ULONG_PTR)remote);
+}
+
 typedef struct {
-    BOOL fixDLSSPresets, lockEngineIni, enableDynamicResolution;
+    BOOL fixDLSSPresets, lockEngineIni, enableDynamicResolution, skipIntro, hideOnlineMenu, ue4ss, agentControl;
 } LauncherSettings;
 
 __declspec(noinline) static BOOL PrepareConfiguration(const WCHAR* gameDir,
@@ -115,6 +214,10 @@ __declspec(noinline) static BOOL PrepareConfiguration(const WCHAR* gameDir,
     settings->fixDLSSPresets = ReadConfigUInt(configPath, L"Launcher", L"FixDLSSPresets", 1, 0, 1);
     settings->lockEngineIni = ReadConfigUInt(configPath, L"Launcher", L"LockEngineIni", 1, 0, 1);
     settings->enableDynamicResolution = ReadConfigUInt(configPath, L"Launcher", L"EnableDynamicResolution", 1, 0, 1);
+    settings->skipIntro = ReadConfigUInt(configPath, L"Launcher", L"SkipIntro", 1, 0, 1);
+    settings->hideOnlineMenu = ReadConfigUInt(configPath, L"Launcher", L"HideOnlineMenu", 1, 0, 1);
+    settings->ue4ss = ReadConfigUInt(configPath, L"Debug", L"UE4SS", 0, 0, 1);
+    settings->agentControl = ReadConfigUInt(configPath, L"Debug", L"AgentControl", 0, 0, 1);
     lstrcpyW(modIniPath, gameDir); lstrcatW(modIniPath, L"\\Game\\Binaries\\Win64\\dlssg_sm86.ini");
     if (!SyncModSettings(configPath, modIniPath)) return FALSE;
     DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
@@ -337,6 +440,13 @@ void entry(void) {
     LauncherSettings settings;
     if (!PrepareConfiguration(exePath, engineIniPath, &settings)) ExitProcess(4);
 
+    // Read by the offline-mode module in the game (the game inherits this environment).
+    SetEnvironmentVariableW(L"AC8_BOOTSTRAP_SKIP_INTRO", settings.skipIntro ? L"1" : NULL);
+    SetEnvironmentVariableW(L"AC8_BOOTSTRAP_HIDE_ONLINE_MENU", settings.hideOnlineMenu ? L"1" : NULL);
+    SetEnvironmentVariableW(L"AC8_BOOTSTRAP_AGENT_CONTROL", settings.agentControl ? L"1" : NULL);
+    WCHAR ue4ssPath[MAX_PATH];
+    lstrcpyW(ue4ssPath, targetDir); lstrcatW(ue4ssPath, L"\\ue4ss\\UE4SS.dll");
+
     HANDLE hIniLock = INVALID_HANDLE_VALUE;
     if (settings.lockEngineIni && engineIniPath[0] != L'\0') {
         hIniLock = CreateFileW(
@@ -411,6 +521,8 @@ void entry(void) {
             drsFlag = FindDynamicResolutionFlag(code, imageBase + DRS_IS_SUPPORTED_RVA);
     }
 
+    if (settings.skipIntro || settings.hideOnlineMenu || settings.agentControl) MapOfflineModule(pi.hProcess, pi.hThread);
+    if (settings.ue4ss && GetFileAttributesW(ue4ssPath) != INVALID_FILE_ATTRIBUTES) LoadDebugModule(pi.hProcess, pi.hThread, ue4ssPath);
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
 

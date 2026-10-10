@@ -31,7 +31,13 @@ extern "C" void* ProxyResolve(unsigned index) {
     if (!real) { RaiseFailFastException(NULL, NULL, 0); return NULL; }
     void* function = InterlockedCompareExchangePointer(&g_targets[index], NULL, NULL);
     if (!function) {
+#ifdef PROXY_RESOLVE_BY_NAME
+        // Standalone startup's Wine-compatible loader: standard winmm exports
+        // are resolved by name, not host-Windows ordinal numbering.
+        function = (void*)GetProcAddress(real, kProxyNames[index] ? kProxyNames[index] : (LPCSTR)(ULONG_PTR)kProxyOrdinals[index]);
+#else
         function = (void*)GetProcAddress(real, (LPCSTR)(ULONG_PTR)kProxyOrdinals[index]);
+#endif
         if (!function) { RaiseFailFastException(NULL, NULL, 0); return NULL; }
         InterlockedCompareExchangePointer(&g_targets[index], function, NULL);
     }

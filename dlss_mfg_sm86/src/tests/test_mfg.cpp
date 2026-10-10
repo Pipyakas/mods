@@ -21,6 +21,12 @@ static sl::Result FakeState(const sl::ViewportHandle&, sl::DLSSGState& state, co
     state.numFramesToGenerateMax = 3;
     return sl::Result::eOk;
 }
+// Out of VRAM (FF16 on 8 GB): the upgraded query warns, the caller's v1 one works.
+static int g_stateCalls = 0;
+static sl::Result LowVramState(const sl::ViewportHandle&, sl::DLSSGState& state, const sl::DLSSGOptions*) {
+    ++g_stateCalls;
+    return state.structVersion == 1 ? sl::Result::eOk : sl::Result::eWarnOutOfVRAM;
+}
 
 // ---- Mode 1 fakes ----
 static sl::Result DynamicFakeState(const sl::ViewportHandle&, sl::DLSSGState& state, const sl::DLSSGOptions*) {
@@ -50,6 +56,11 @@ static int TestRefreshBands(void) {
     WritePrivateProfileStringW(L"FrameGeneration", L"LowRefreshMaxHz", L"120", path);
     WritePrivateProfileStringW(L"FrameGeneration", L"MediumRefreshMaxHz", L"60", path);
     if (FramesAt(path, 120) != 1 || FramesAt(path, 121) != 3) return 5;
+    // A fixed count (the in-game menu's 2x/3x/4x) overrides every band; out of range is ignored.
+    WritePrivateProfileStringW(L"FrameGeneration", L"GeneratedFrames", L"2", path);
+    if (FramesAt(path, 60) != 2 || FramesAt(path, 144) != 2 || FramesAt(path, 0) != 2) return 6;
+    WritePrivateProfileStringW(L"FrameGeneration", L"GeneratedFrames", L"4", path);
+    if (FramesAt(path, 121) != 3) return 7;
     DeleteFileW(path);
     return 0;
 }
@@ -106,6 +117,12 @@ static int TestFixedMode(void) {
         if (FixedGetState(viewport, state, NULL) != sl::Result::eOk || state.structVersion != version || state.numFramesActuallyPresented != 4 || g_maximum != 3) return 28;
         for (size_t i = 32 + body; i < sizeof(buffer); ++i) if (buffer[i] != 0x5a) return 29;
     }
+    // A rejected state upgrade pauses the override: one query per call afterwards.
+    g_state = LowVramState; g_stateCalls = 0;
+    sl::DLSSGState low; low.structVersion = 1;
+    if (FixedGetState(viewport, low, NULL) != sl::Result::eOk || g_disabled != 1 || g_stateCalls != 2) return 140;
+    if (FixedGetState(viewport, low, NULL) != sl::Result::eOk || g_stateCalls != 3) return 141;
+    g_state = FakeState; g_disabled = 0;
     VirtualFree(allocation, 0, MEM_RELEASE);
     return 0;
 }
@@ -151,6 +168,20 @@ static int TestDynamicMode(void) {
     return 0;
 }
 
+// Idle cursor: stick noise inside the deadzone is not input; a button, a pulled
+// trigger or a stick past the deadzone is.
+static int TestGamepadActive(void) {
+    XINPUT_GAMEPAD pad = {};
+    pad.sThumbLX = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE - 1; pad.sThumbRY = -1000;
+    pad.bLeftTrigger = XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+    if (GamepadActive(pad)) return 120;
+    XINPUT_GAMEPAD button = pad; button.wButtons = XINPUT_GAMEPAD_A;
+    XINPUT_GAMEPAD trigger = pad; trigger.bRightTrigger = 255;
+    XINPUT_GAMEPAD stick = pad; stick.sThumbRX = -XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE - 1;
+    if (!GamepadActive(button) || !GamepadActive(trigger) || !GamepadActive(stick)) return 121;
+    return 0;
+}
+
 // Pre-2.7 SDKs (NG2B, Khazan) send v1 options and state. Each old options object
 // ends at a guard page, as in TestFixedMode; the v1 state keeps its canary.
 static int TestDynamicHistoric(void) {
@@ -189,7 +220,7 @@ static int TestConfiguration(void) {
     WCHAR temp[MAX_PATH], config[MAX_PATH];
     if (!GetTempPathW(MAX_PATH, temp) || !GetTempFileNameW(temp, L"mfg", 0, config)) return 40;
     ReadConfiguration(config);
-    if (g_mode != 2 || !g_logging || g_sampleMs != 10000 || g_targetFPS != 0.0f) return 41;
+    if (g_mode != 2 || !g_logging || g_sampleMs != 10000 || g_targetFPS != 0.0f || g_cursorIdleMs != 0) return 41;
     for (auto item : {std::make_pair(L"0", 0u), std::make_pair(L"1", 1u), std::make_pair(L" 2 ", 2u), std::make_pair(L"3", 3u)}) {
         WritePrivateProfileStringW(L"FrameGeneration", L"Mode", item.first, config);
         ReadConfiguration(config);
@@ -201,11 +232,26 @@ static int TestConfiguration(void) {
         ReadConfiguration(config);
         if (g_mode != 2) return 43;
     }
+    // Mode 0 in a game with a native menu row: GeneratedFrames 1-3 is a fixed
+    // count (Mode 2), Auto is NVIDIA Dynamic MFG (Mode 1); elsewhere pass-through.
+    WritePrivateProfileStringW(L"FrameGeneration", L"Mode", L"0", config);
+    g_menuGame = TRUE;
+    for (auto item : {std::make_pair(L"2", 2u), std::make_pair(L"Auto", 1u), std::make_pair(L"0", 1u)}) {
+        WritePrivateProfileStringW(L"FrameGeneration", L"GeneratedFrames", item.first, config);
+        ReadConfiguration(config);
+        if (g_mode != item.second || g_configMode != 0) return 151;
+    }
+    g_menuGame = FALSE;
+    ReadConfiguration(config);
+    if (g_mode != 0) return 152;
+    WritePrivateProfileStringW(L"FrameGeneration", L"GeneratedFrames", NULL, config);
+    WritePrivateProfileStringW(L"FrameGeneration", L"Mode", L"2", config);
     WritePrivateProfileStringW(L"FrameGeneration", L"TargetFPS", L"59.94", config);
     WritePrivateProfileStringW(L"Logging", L"Enabled", L"0", config);
     WritePrivateProfileStringW(L"Logging", L"SampleIntervalMs", L"250", config);
+    WritePrivateProfileStringW(L"Cursor", L"HideWhenIdleMs", L"3000", config);
     ReadConfiguration(config);
-    if (g_logging || g_sampleMs != 250 || g_targetFPS < 59.93f || g_targetFPS > 59.95f) return 44;
+    if (g_logging || g_sampleMs != 250 || g_targetFPS < 59.93f || g_targetFPS > 59.95f || g_cursorIdleMs != 3000) return 44;
     for (const WCHAR* text : {L"nan", L"inf", L"-1", L"1001", L"60fps", L""}) {
         WritePrivateProfileStringW(L"FrameGeneration", L"TargetFPS", text, config);
         ReadConfiguration(config);
@@ -288,6 +334,19 @@ static int TestLiveReload(void) {
     incoming.structVersion = 3;
     HookSetOptions(viewport, incoming);
     if (g_seenMode != sl::DLSSGMode::eDynamic) return 77;
+    // A rejection sticks while FG stays on, and through repeated off requests
+    // (FF16 menus send one per frame); switching FG back on clears it.
+    g_reject = true;
+    HookSetOptions(viewport, incoming);
+    g_reject = false;
+    HookSetOptions(viewport, incoming);
+    if (g_disabled != 1 || g_seenMode != sl::DLSSGMode::eOn) return 130;
+    sl::DLSSGOptions off = incoming; off.mode = sl::DLSSGMode::eOff;
+    HookSetOptions(viewport, off);
+    HookSetOptions(viewport, off);
+    if (g_disabled != 1) return 132;
+    HookSetOptions(viewport, incoming);
+    if (g_disabled != 0 || g_seenMode != sl::DLSSGMode::eDynamic) return 131;
     // [ConsoleVariables]: ignored outside Unreal; integers, floats, comments and
     // malformed values.
     WritePrivateProfileStringW(L"ConsoleVariables", L"r.Test.Ignored", L"1", g_config);
@@ -424,9 +483,10 @@ int main(void) {
     if (!result) result = TestFixedMode();
     if (!result) result = TestDynamicMode();
     if (!result) result = TestDynamicHistoric();
+    if (!result) result = TestGamepadActive();
     if (!result) result = TestConfiguration();
     if (result) { printf("FAIL: code %d\n", result); return result; }
     puts("PASS: image marker scan; Mode 3 governor, Reflex summary, console variable validation; live reload and mode dispatch; refresh bands; Mode 2 v1-v5 guard-page conversion, state canaries, Off/cap/unsupported/rejection; "
-         "Mode 1 dynamic upgrade, v1-v5 guard-page conversion, v1 state canary, target FPS, Off/unsupported/rejection; mode, target FPS and log-path config");
+         "Mode 1 dynamic upgrade, v1-v5 guard-page conversion, v1 state canary, target FPS, Off/unsupported/rejection; gamepad deadzones; mode, target FPS, cursor and log-path config");
     return 0;
 }

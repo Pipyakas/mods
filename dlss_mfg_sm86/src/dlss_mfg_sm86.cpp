@@ -3,7 +3,9 @@
 // documented Streamline DLSS-G options/state API and rewrites only the frame
 // generation requests the game itself makes. FG on/off and Reflex stay under
 // the game's control.
-//   Mode 0  pass-through
+//   Mode 0  the game decides: in a game with a native menu row (Ghostrunner 2,
+//           Khazan, Ace Combat 8, Ninja Gaiden 2 Black, Returnal) its in-game
+//           Off/2x/3x/4x/Auto setting, elsewhere pass-through
 //   Mode 1  NVIDIA Dynamic MFG: on/auto requests become eDynamic
 //   Mode 2  fixed count chosen from the primary display refresh rate
 //   Mode 3  experimental governor: by default the most generated frames that keep
@@ -16,6 +18,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <xinput.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -42,7 +45,10 @@ static_assert(offsetof(sl::DLSSGState, bIsDynamicMFGSupported) == 80, "Unexpecte
 static WCHAR g_directory[MAX_PATH], g_config[MAX_PATH], g_log[MAX_PATH];
 static SRWLOCK g_logLock = SRWLOCK_INIT;
 // Mode and target FPS are re-read on a live INI reload while hooks run.
-static volatile DWORD g_mode = 2;
+// g_mode is the mode in effect: the INI's, or for Mode 0 in a game with a
+// native menu row the in-game setting's (1 for Auto, 2 for a count).
+static volatile DWORD g_mode = 2, g_configMode = 2;
+static BOOL g_menuGame = FALSE;
 static DWORD g_sampleMs = 10000;
 static BOOL g_logging = TRUE, g_runtimeMFG = FALSE;
 static volatile float g_targetFPS = 0.0f;
@@ -50,7 +56,8 @@ static volatile float g_targetFPS = 0.0f;
 static volatile LONG g_requested = 0, g_maximum = 1;
 // Mode 1: whether the runtime reports Dynamic MFG support (-1 = not yet known).
 static volatile LONG g_support = -1;
-// Set when the runtime rejects an override; the original request is then used.
+// Set when the runtime rejects an override (e.g. eWarnOutOfVRAM); the original
+// request is then used until the game turns FG off or the INI is reloaded.
 static volatile LONG g_disabled = 0;
 // Bumped by every configuration (re)load so the hooks log their next request.
 static volatile LONG g_epoch = 0;
@@ -62,6 +69,17 @@ static volatile LONG g_dynamicResolution = 0, g_dynamicResPercent = 0;
 // features (Mode 3 dynamic resolution, [ConsoleVariables]). Other Streamline
 // games get the frame generation modes only.
 static BOOL g_unreal = FALSE;
+// [Cursor] HideWhenIdleMs: hide the mouse cursor over the game window once it
+// has been still this long (0 = off). Controller games can leave it on screen.
+static volatile DWORD g_cursorIdleMs = 0;
+// [Reflex] Boost=1: the game's plain low-latency request is sent as Boost.
+static volatile LONG g_reflexConfig = 0;
+// [Reflex] Mode: 0/1/2 sends Off/On/Boost whatever the game asks (Off stays On
+// while frame generation runs, which needs Reflex); 3 = as the game asks.
+static volatile LONG g_reflexForced = 3;
+// [FrameGeneration] Enabled=0 keeps frame generation off whatever the game asks
+// (for games without a setting of their own, e.g. through a menu row).
+static volatile LONG g_frameGenEnabled = 1;
 static volatile LONG g_stateInstalled = 0, g_optionsInstalled = 0;
 static PFun_slGetFeatureFunction* g_resolve;
 static PFun_slDLSSGSetOptions* g_options;
@@ -90,7 +108,10 @@ static DWORD Setting(const WCHAR* path, const WCHAR* section, const WCHAR* key,
 
 // Thresholds are inclusive upper bounds: 2x up to LowRefreshMaxHz, 3x up to
 // MediumRefreshMaxHz, 4x above. An unknown refresh rate (0) selects nothing.
+// GeneratedFrames (1-3, e.g. from an in-game menu) fixes the count instead.
 static DWORD FramesAt(const WCHAR* path, DWORD hz) {
+    DWORD fixed = Setting(path, L"FrameGeneration", L"GeneratedFrames", 0, 0, 3);
+    if (fixed) return fixed;
     if (hz < 2) return 0;
     DWORD low = Setting(path, L"FrameGeneration", L"LowRefreshMaxHz", 60, 2, 1000);
     DWORD medium = Setting(path, L"FrameGeneration", L"MediumRefreshMaxHz", 90, 2, 1000);
@@ -117,10 +138,31 @@ static DWORD PrimaryHz(void) {
     }
 }
 
+// Games whose own frame generation setting gets an Off/2x/3x/4x/Auto row
+// (the menu_*.cpp modules), unless [Menu] Enabled=0.
+static BOOL MenuGame(const WCHAR* path) {
+    WCHAR executable[MAX_PATH];
+    if (!GetModuleFileNameW(NULL, executable, MAX_PATH) || !Setting(path, L"Menu", L"Enabled", 1, 0, 1)) return FALSE;
+    const WCHAR* name = wcsrchr(executable, L'\\');
+    name = name ? name + 1 : executable;
+    for (const WCHAR* game : {L"Ghostrunner2-Win64-Shipping.exe", L"BBQ-Win64-Shipping.exe", L"AceCombat8.exe",
+                              L"NINJAGAIDEN2BLACK-Win64-Shipping.exe", L"Returnal-Win64-Shipping.exe"})
+        if (!_wcsicmp(name, game)) return TRUE;
+    return FALSE;
+}
+
 static void ReadConfiguration(const WCHAR* path) {
-    g_mode = Setting(path, L"FrameGeneration", L"Mode", 2, 0, 3);
+    g_configMode = Setting(path, L"FrameGeneration", L"Mode", 2, 0, 3);
+    // Mode 0 with a native menu row: the in-game setting, kept as
+    // GeneratedFrames (1-3 a fixed count, Auto: NVIDIA Dynamic MFG).
+    g_mode = g_configMode || !g_menuGame ? g_configMode :
+        Setting(path, L"FrameGeneration", L"GeneratedFrames", 0, 0, 3) ? 2 : 1;
     g_logging = Setting(path, L"Logging", L"Enabled", 1, 0, 1);
     g_sampleMs = Setting(path, L"Logging", L"SampleIntervalMs", 10000, 100, 3600000);
+    g_cursorIdleMs = Setting(path, L"Cursor", L"HideWhenIdleMs", 0, 0, 3600000);
+    g_reflexConfig = Setting(path, L"Reflex", L"Boost", 0, 0, 1);
+    g_reflexForced = Setting(path, L"Reflex", L"Mode", 3, 0, 3);
+    g_frameGenEnabled = Setting(path, L"FrameGeneration", L"Enabled", 1, 0, 1);
     WCHAR text[64];
     DWORD length = GetPrivateProfileStringW(L"FrameGeneration", L"TargetFPS", L"0", text, 64, path);
     WCHAR* end;
@@ -265,13 +307,15 @@ static sl::Result DynamicSetOptions(const sl::ViewportHandle& viewport, const sl
 static sl::Result FixedGetState(const sl::ViewportHandle& viewport, sl::DLSSGState& output,
     const sl::DLSSGOptions* options) {
     const size_t bytes = StateBodyExtent(output.structVersion);
-    if (!g_runtimeMFG || !bytes) return g_state(viewport, output, options);
+    if (!g_runtimeMFG || !bytes || g_disabled) return g_state(viewport, output, options);
     sl::DLSSGState current;
     current.structVersion = output.structVersion == 4 ? 4 : 3;
     current.next = output.next;
     sl::Result result = g_state(viewport, current, options);
     if (result != sl::Result::eOk) {
-        Log("State upgrade rejected result=%d; retrying original state", (int)result);
+        // Pause overriding like a rejected request, instead of querying twice per frame.
+        Log("State upgrade rejected result=%d; override disabled, original state retried", (int)result);
+        InterlockedExchange(&g_disabled, 1);
         return g_state(viewport, output, options);
     }
     memcpy((char*)&output + 32, (char*)&current + 32, bytes);
@@ -337,22 +381,25 @@ static sl::Result FixedSetOptions(const sl::ViewportHandle& viewport, const sl::
 
 // ---- Hook installation -----------------------------------------------------
 
-// Fixed multi-frame counts need Streamline 2.7 or newer.
+// Fixed multi-frame counts need Streamline 2.7 or newer. The version is read
+// from the loaded module's own resource: linking version.dll would make the
+// proxy load the system copy, which can then shadow dlssg_sm86's version.dll
+// (e.g. when the Steam overlay loads this proxy early with its search order).
 static BOOL HasMFGVersion(void* function) {
     WCHAR path[MAX_PATH]; HMODULE module;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         (LPCWSTR)function, &module) || !GetModuleFileNameW(module, path, MAX_PATH)) return FALSE;
-    DWORD size = GetFileVersionInfoSizeW(path, NULL);
-    if (!size) return FALSE;
-    void* data = HeapAlloc(GetProcessHeap(), 0, size);
-    if (!data) return FALSE;
-    VS_FIXEDFILEINFO* version = NULL; UINT length;
-    BOOL ok = GetFileVersionInfoW(path, 0, size, data) && VerQueryValueW(data, L"\\", (void**)&version, &length);
-    BOOL supported = ok && HIWORD(version->dwFileVersionMS) == 2 && LOWORD(version->dwFileVersionMS) >= 7;
-    if (ok) Log("Runtime %ls version=%u.%u.%u.%u fixedMFG=%u", path,
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(16)); // VS_VERSION_INFO, RT_VERSION
+    HGLOBAL loaded = resource ? LoadResource(module, resource) : NULL;
+    const BYTE* data = loaded ? (const BYTE*)LockResource(loaded) : NULL;
+    DWORD size = resource ? SizeofResource(module, resource) : 0;
+    const VS_FIXEDFILEINFO* version = NULL;
+    for (DWORD at = 0; data && at + sizeof(VS_FIXEDFILEINFO) <= size && at < 256 && !version; at += 4)
+        if (*(const DWORD*)(data + at) == 0xFEEF04BD) version = (const VS_FIXEDFILEINFO*)(data + at);
+    BOOL supported = version && HIWORD(version->dwFileVersionMS) == 2 && LOWORD(version->dwFileVersionMS) >= 7;
+    if (version) Log("Runtime %ls version=%u.%u.%u.%u fixedMFG=%u", path,
         HIWORD(version->dwFileVersionMS), LOWORD(version->dwFileVersionMS),
         HIWORD(version->dwFileVersionLS), LOWORD(version->dwFileVersionLS), (unsigned)supported);
-    HeapFree(GetProcessHeap(), 0, data);
     return supported;
 }
 
@@ -360,6 +407,7 @@ static BOOL HasMFGVersion(void* function) {
 
 // Re-reads the INI and picks the Mode 2 count for the given refresh rate. A
 // fresh configuration also clears an earlier override rejection.
+static void RefreshReflex();
 static void ApplyConfiguration(DWORD hz, const char* reason) {
     ReadConfiguration(g_config);
     // Mode 3 starts from the refresh band and keeps its governor's choice afterwards.
@@ -368,8 +416,9 @@ static void ApplyConfiguration(DWORD hz, const char* reason) {
     InterlockedExchange(&g_requested, frames);
     InterlockedExchange(&g_disabled, 0);
     InterlockedIncrement(&g_epoch);
-    Log("%s Mode=%lu refreshHz=%lu selectedGenerated=%ld multiplier=%ld targetFPS=%.3f",
-        reason, g_mode, hz, frames, frames ? frames + 1 : 0, g_targetFPS);
+    Log("%s Mode=%lu%s refreshHz=%lu selectedGenerated=%ld multiplier=%ld targetFPS=%.3f",
+        reason, g_mode, g_configMode != g_mode ? " (Mode 0: the in-game setting)" : "", hz, frames, frames ? frames + 1 : 0, g_targetFPS);
+    RefreshReflex();
 }
 
 static BOOL ConfigStamp(FILETIME* stamp) {
@@ -421,10 +470,73 @@ static sl::Result HookGetState(const sl::ViewportHandle& viewport, sl::DLSSGStat
         mode >= 2 ? FixedGetState(viewport, state, options) : g_state(viewport, state, options);
 }
 
-static sl::Result HookSetOptions(const sl::ViewportHandle& viewport, const sl::DLSSGOptions& options) {
+static volatile LONG g_frameGenActive = 0;
+static void RefreshReflex();
+static sl::Result HookSetOptions(const sl::ViewportHandle& viewport, const sl::DLSSGOptions& requested) {
+    // [FrameGeneration] Enabled=0: an off request in the caller's layout.
+    const sl::DLSSGOptions* chosen = &requested;
+    sl::DLSSGOptions off;
+    const size_t extent = OptionsExtent(requested.structVersion);
+    if (!g_frameGenEnabled && requested.mode != sl::DLSSGMode::eOff && extent) {
+        memcpy(&off, &requested, extent);
+        off.mode = sl::DLSSGMode::eOff;
+        chosen = &off;
+    }
+    const sl::DLSSGOptions& options = *chosen;
+    // FG switched back on: try the override again (settings may have changed).
+    // Not on every off request: some games (FF16 menus) send one per frame.
+    static volatile LONG wasOff = 0;
+    LONG isOff = options.mode == sl::DLSSGMode::eOff;
+    if (InterlockedExchange(&wasOff, isOff) && !isOff && g_disabled) InterlockedExchange(&g_disabled, 0);
+    // Reflex follows: a forced Off is only possible without frame generation.
+    if (InterlockedExchange(&g_frameGenActive, !isOff) != !isOff) RefreshReflex();
     DWORD mode = g_mode;
     return mode == 1 ? DynamicSetOptions(viewport, options) :
         mode >= 2 ? FixedSetOptions(viewport, options) : g_options(viewport, options);
+}
+
+// Reflex. Games that use frame generation lock Reflex at plain low latency
+// while it is on. [Reflex] Boost=1 sends that request as Boost instead; a menu
+// module that offers the choice in the game (Ghostrunner 2) decides instead of
+// the INI (g_reflexMenu: -1 none, else 0/1). The game's last options are kept
+// so a change is sent at once.
+static PFun_slReflexSetOptions* g_reflexOptions;
+static volatile LONG g_reflexInstalled = 0, g_reflexMenu = -1;
+static sl::ReflexOptions g_reflexLast{};
+static volatile LONG g_reflexKnown = 0;
+static SRWLOCK g_reflexLock = SRWLOCK_INIT;
+
+static sl::Result SendReflex(const sl::ReflexOptions& requested) {
+    sl::ReflexOptions options = requested;
+    LONG menu = g_reflexMenu, forced = g_reflexForced;
+    if (forced <= 2)
+        options.mode = forced == 0 && g_frameGenActive ? sl::ReflexMode::eLowLatency : (sl::ReflexMode)forced;
+    else if ((menu >= 0 ? menu : g_reflexConfig) && options.mode == sl::ReflexMode::eLowLatency)
+        options.mode = sl::ReflexMode::eLowLatencyWithBoost;
+    sl::Result result = g_reflexOptions(options);
+    static volatile LONG previous = -1;
+    LONG sent = (LONG)options.mode;
+    if (InterlockedExchange(&previous, sent) != sent)
+        Log("Reflex requested=%d sent=%d result=%d", (int)requested.mode, (int)options.mode, (int)result);
+    return result;
+}
+static sl::Result HookReflexOptions(const sl::ReflexOptions& options) {
+    AcquireSRWLockExclusive(&g_reflexLock);
+    g_reflexLast = options; g_reflexKnown = 1;
+    sl::Result result = SendReflex(options);
+    ReleaseSRWLockExclusive(&g_reflexLock);
+    return result;
+}
+// Re-sends the game's last options after the INI or the menu choice changed.
+static void RefreshReflex() {
+    if (!g_reflexOptions || !g_reflexKnown) return;
+    AcquireSRWLockExclusive(&g_reflexLock);
+    SendReflex(g_reflexLast);
+    ReleaseSRWLockExclusive(&g_reflexLock);
+}
+// Called by menu modules (game thread) with the player's Boost choice.
+static void SetReflexBoost(bool boost) {
+    if (InterlockedExchange(&g_reflexMenu, boost) != (LONG)boost) RefreshReflex();
 }
 
 static void Install(const char* name, void* function) {
@@ -435,9 +547,11 @@ static void Install(const char* name, void* function) {
         flag = &g_stateInstalled; original = (void**)&g_state; hook = (void*)HookGetState;
     } else if (!strcmp(name, "slDLSSGSetOptions")) {
         flag = &g_optionsInstalled; original = (void**)&g_options; hook = (void*)HookSetOptions;
+    } else if (!strcmp(name, "slReflexSetOptions")) {
+        flag = &g_reflexInstalled; original = (void**)&g_reflexOptions; hook = (void*)HookReflexOptions;
     } else return;
     if (InterlockedCompareExchange(flag, 1, 0)) return;
-    g_runtimeMFG = HasMFGVersion(function);
+    if (flag != &g_reflexInstalled) g_runtimeMFG = HasMFGVersion(function);
     MH_STATUS status = MH_CreateHook(function, hook, original);
     if (status == MH_OK) status = MH_EnableHook(function);
     Log("Hook %s %s", name, MH_StatusToString(status));
@@ -446,7 +560,7 @@ static void Install(const char* name, void* function) {
 
 static sl::Result Resolve(sl::Feature feature, const char* name, void*& function) {
     sl::Result result = g_resolve(feature, name, function);
-    if (result == sl::Result::eOk && feature == sl::kFeatureDLSS_G) Install(name, function);
+    if (result == sl::Result::eOk && (feature == sl::kFeatureDLSS_G || feature == sl::kFeatureReflex)) Install(name, function);
     return result;
 }
 
@@ -1054,6 +1168,117 @@ static DWORD WINAPI Governor(void*) {
     }
 }
 
+// ---- Idle cursor ------------------------------------------------------------
+// A 250 ms poll decides; the game window's own thread applies it. The window is
+// subclassed (original procedure kept in a window property) on first hide, and
+// only WM_SETCURSOR over the client area is answered while hidden. The cursor
+// hides once the mouse has been still for HideWhenIdleMs, or at once on gamepad
+// input (XInput packet numbers); any mouse movement shows it again.
+
+static const WCHAR kCursorProperty[] = L"DlssMfgSm86.WndProc";
+static volatile LONG g_cursorHidden = 0;
+
+static LRESULT CALLBACK CursorWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    WNDPROC original = (WNDPROC)GetPropW(window, kCursorProperty);
+    if (message == WM_SETCURSOR && g_cursorHidden && LOWORD(lParam) == HTCLIENT) {
+        SetCursor(NULL);
+        return TRUE;
+    }
+    if (message == WM_NCDESTROY) RemovePropW(window, kCursorProperty);
+    return original ? CallWindowProcW(original, window, message, wParam, lParam) :
+        DefWindowProcW(window, message, wParam, lParam);
+}
+
+// A pressed button, pulled trigger or stick past XInput's deadzone: packet
+// numbers alone also change with stick noise and drift.
+static BOOL GamepadActive(const XINPUT_GAMEPAD& pad) {
+    auto stick = [](SHORT x, SHORT y, int zone) { return (int)x * x + (int)y * y > zone * zone; };
+    return pad.wButtons || pad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+        pad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+        stick(pad.sThumbLX, pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) ||
+        stick(pad.sThumbRX, pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
+}
+
+// True when any connected controller reported new, active input since the last
+// call. Polling an empty slot is slow, so those are only rechecked every 16th call.
+static BOOL GamepadInput(void) {
+    typedef DWORD (WINAPI* GetStateFn)(DWORD, XINPUT_STATE*);
+    static GetStateFn getState = (GetStateFn)GetProcAddress(
+        LoadLibraryExW(L"xinput1_4.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32), "XInputGetState");
+    static DWORD packets[XUSER_MAX_COUNT];
+    static BOOL connected[XUSER_MAX_COUNT];
+    static unsigned calls = 0;
+    if (!getState) return FALSE;
+    BOOL input = FALSE, rescan = calls++ % 16 == 0;
+    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+        if (!connected[i] && !rescan) continue;
+        XINPUT_STATE state;
+        BOOL now = getState(i, &state) == ERROR_SUCCESS;
+        if (now && connected[i] && state.dwPacketNumber != packets[i] && GamepadActive(state.Gamepad)) input = TRUE;
+        if (now) packets[i] = state.dwPacketNumber;
+        connected[i] = now;
+    }
+    return input;
+}
+
+static DWORD WINAPI CursorWatcher(void*) {
+    POINT last = {};
+    ULONGLONG still = GetTickCount64();
+    BOOL padSinceMove = FALSE;
+    for (;;) {
+        Sleep(250);
+        POINT now;
+        if (!GetCursorPos(&now)) continue;
+        if (now.x != last.x || now.y != last.y) { last = now; still = GetTickCount64(); padSinceMove = FALSE; }
+        if (GamepadInput()) padSinceMove = TRUE;
+        HWND window = GetForegroundWindow();
+        DWORD process = 0;
+        if (window) GetWindowThreadProcessId(window, &process);
+        DWORD idle = g_cursorIdleMs;
+        LONG hide = idle && process == GetCurrentProcessId() &&
+            (padSinceMove || GetTickCount64() - still >= idle) &&
+            GetAncestor(WindowFromPoint(now), GA_ROOT) == window;
+        if (hide == g_cursorHidden) continue;
+        if (hide && !GetPropW(window, kCursorProperty)) {
+            WNDPROC original = (WNDPROC)GetWindowLongPtrW(window, GWLP_WNDPROC);
+            if (!original || !SetPropW(window, kCursorProperty, (HANDLE)original)) continue;
+            SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)CursorWindowProc);
+            Log("Cursor window subclassed");
+        }
+        InterlockedExchange(&g_cursorHidden, hide);
+        // Re-evaluate now rather than on the next mouse move.
+        if (process == GetCurrentProcessId())
+            PostMessageW(window, WM_SETCURSOR, (WPARAM)window, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+    }
+}
+
+#include "streamline1.cpp"
+#include "menu_returnal.cpp"
+#include "ue_reflection.cpp"
+#include "menu_ghostrunner2.cpp"
+#include "menu_khazan.cpp"
+#include "menu_ac8.cpp"
+#include "menu_ng2b.cpp"
+#include "ue_host.cpp"
+
+// dlssg_sm86 ships as version.dll beside the game. Anything that loads the
+// system version.dll before the game's imports are bound (Windows compatibility
+// shims such as the DXALLOWMODECHANGEONLAUNCH layer do) makes the game use that
+// copy instead, and DLSS-G reports itself unsupported. Load it explicitly then;
+// it is still in time, as Streamline loads much later.
+static void LoadShadowedDlssg(void) {
+    WCHAR path[MAX_PATH], settings[MAX_PATH], loaded[MAX_PATH] = L"";
+    wcscpy_s(path, g_directory); wcscat_s(path, L"version.dll");
+    wcscpy_s(settings, g_directory); wcscat_s(settings, L"dlssg_sm86.ini");
+    if (GetFileAttributesW(settings) == INVALID_FILE_ATTRIBUTES || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return;
+    if (GetModuleHandleW(path)) return; // bound normally (or this proxy is version.dll)
+    HMODULE system = GetModuleHandleW(L"version.dll");
+    if (system) GetModuleFileNameW(system, loaded, MAX_PATH);
+    HMODULE module = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    Log("dlssg_sm86 version.dll was not loaded (version.dll = %ls); loaded it directly: %s",
+        loaded[0] ? loaded : L"none", module ? "ok" : "failed");
+}
+
 static DWORD WINAPI Worker(void*) {
     HMODULE pinned;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, (LPCWSTR)Worker, &pinned);
@@ -1065,8 +1290,22 @@ static DWORD WINAPI Worker(void*) {
     }
     // Hold the singleton for the process lifetime; never race a second copy.
     wcscpy_s(g_config, g_directory); wcscat_s(g_config, MFG_CONFIG_NAME);
+    g_menuGame = MenuGame(g_config);
     ReadConfiguration(g_config);
     if (g_logging && !ConfigureLogPath(g_config)) g_logging = FALSE;
+    // Optional independent startup mod. Its own INI and worker do not depend on
+    // Streamline, DLSS or this DLL; AMD/Proton uses its standalone winmm proxy.
+    WCHAR startupMod[MAX_PATH]; wcscpy_s(startupMod, g_directory); wcscat_s(startupMod, L"game_startup.dll");
+    if (GetFileAttributesW(startupMod) != INVALID_FILE_ATTRIBUTES)
+        Log("Startup addon %s", LoadLibraryExW(startupMod, NULL, LOAD_WITH_ALTERED_SEARCH_PATH) ? "loaded" : "failed");
+    LoadShadowedDlssg();
+    // Only started when enabled at launch; the delay itself reloads live.
+    if (g_cursorIdleMs) {
+        HANDLE cursor = CreateThread(NULL, 0, CursorWatcher, NULL, 0, NULL);
+        if (cursor) CloseHandle(cursor);
+        Log("Cursor HideWhenIdleMs=%lu", g_cursorIdleMs);
+    }
+    menu::Start();
     HMODULE interposer = NULL;
     DWORD waitMs = Setting(g_config, L"Hooks", L"WaitTimeoutMs", 120000, 1000, 600000);
     ULONGLONG deadline = GetTickCount64() + waitMs;
@@ -1075,12 +1314,18 @@ static DWORD WINAPI Worker(void*) {
         if (!interposer) Sleep(1);
     }
     if (!interposer) { Log("Interposer did not load within %lu ms", waitMs); return 2; }
+    // A Streamline 1.x game bridged to the 2.14.1 runtime: hook that one.
+    interposer = bridge::Interposer(interposer);
     // Checked only once Streamline is loading: a protected executable has
     // unpacked its data by then, and the scan never delays a non-Streamline game.
     // Any game that loads Streamline is supported; Unreal is detected by a console
     // variable name present in every UE4.22+/UE5 executable.
     g_unreal = ImageHas(GetModuleHandleW(NULL), L"r.DynamicRes.OperationMode");
     Log("Streamline game, engine=%s", g_unreal ? "Unreal" : "other (console variable features off)");
+    if (g_unreal) {
+        WCHAR executable[MAX_PATH];
+        if (GetModuleFileNameW(NULL, executable, MAX_PATH)) host::Start(executable);
+    }
     DWORD hz = PrimaryHz();
     ApplyConfiguration(hz, "Start");
     HANDLE reloader = CreateThread(NULL, 0, Reloader, (void*)(ULONG_PTR)hz, 0, NULL);
@@ -1088,6 +1333,7 @@ static DWORD WINAPI Worker(void*) {
     HANDLE governor = CreateThread(NULL, 0, Governor, NULL, 0, NULL);
     if (governor) CloseHandle(governor);
     MH_STATUS status = MH_Initialize();
+    if (status == MH_ERROR_ALREADY_INITIALIZED) status = MH_OK; // the bridge started it
     if (status != MH_OK) { Log("Initialize %s", MH_StatusToString(status)); return 1; }
     void* function = (void*)GetProcAddress(interposer, "slGetFeatureFunction");
     if (!function) { Log("Feature resolver missing"); return 3; }
@@ -1107,6 +1353,9 @@ static DWORD WINAPI Worker(void*) {
             if (result == sl::Result::eOk) Install(name, resolved);
             else if (i == 0 || i == retries - 1) Log("Lookup %s result=%d", name, (int)result);
         }
+        void* reflex = NULL;
+        if (!g_reflexInstalled && g_resolve(sl::kFeatureReflex, "slReflexSetOptions", reflex) == sl::Result::eOk)
+            Install("slReflexSetOptions", reflex);
         Sleep(delay);
     }
     return 0;
@@ -1120,6 +1369,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     WCHAR* slash = wcsrchr(g_directory, L'\\');
     if (!slash) return FALSE;
     slash[1] = 0;
+    bridge::Watch();
     HANDLE thread = CreateThread(NULL, 0, Worker, NULL, 0, NULL);
     if (!thread) return FALSE;
     CloseHandle(thread);

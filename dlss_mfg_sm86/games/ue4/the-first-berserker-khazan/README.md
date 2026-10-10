@@ -30,7 +30,8 @@ the current layout like Modes 2 and 3 do.
 ## Check after launch
 
 - `BBQ\Binaries\Win64\dlss_mfg_sm86.log`: `Runtime ...\sl.dlss_g.dll version=2.14.1.0`,
-  both hooks `MH_OK`, then `State callerVersion=1 dynamicSupported=1` and, once FG
-  is on, `Options callerVersion=1 mode=1 ... effectiveMode=3 dynamicOverride=1 result=0`.
+  both hooks `MH_OK`, then, once FG is on, `Options callerVersion=1 mode=1 ...
+  effectiveMode=3 dynamicOverride=1 result=0` (Mode 2: `effectiveGenerated=3 override=1`).
 
-Verified live in Mode 1 at 120 Hz: `presented=3`, 120 fps (2x alone gave 112).
+Verified live in Mode 1 at 120 Hz: `dynamicOverride=1`, `presented=3`, 120 fps (2x
+alone gave 112). Mode 1 is shipped; Mode 2 was not yet run live in this game.

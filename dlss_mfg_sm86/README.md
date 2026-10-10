@@ -33,7 +33,13 @@ dlss_mfg_sm86/
 ├─ src/                      core proxy DLL (Streamline DLSS-G hooks) + tests
 ├─ config/dlss_mfg_sm86.ini  default configuration (the generic release uses it)
 ├─ games/                   per-game extras, grouped by engine
+│  ├─ katana/               category: Koei Tecmo Katana Engine games
+│  │  ├─ dynasty-warriors-origins/
+│  │  └─ rise-of-the-ronin/
+│  ├─ other/                in-house engines with one game here
+│  │  └─ final-fantasy-xvi/
 │  ├─ ue4/                  category: Unreal Engine 4 games (shares the UE5 notes)
+│  │  ├─ ghostrunner-2/
 │  │  └─ the-first-berserker-khazan/
 │  └─ ue5/                  category: Unreal Engine 5 games
 │     ├─ README.md           what UE5 games have in common
@@ -78,7 +84,7 @@ menus). `[FrameGeneration] Mode`:
 
 | Mode | Behaviour | Needs |
 |---|---|---|
-| `0` | pass-through | — |
+| `0` | **In-game setting.** In games whose Frame Generation setting this mod extends to Off / 2x / 3x / 4x / Auto (Ghostrunner 2, Khazan, Ace Combat 8, Ninja Gaiden 2 Black, Returnal), that setting decides: the menu writes `GeneratedFrames` (1–3 a fixed count, `Auto` NVIDIA Dynamic MFG). Elsewhere pass-through. A change in the menu always switches the INI to Mode 0. | `[Menu] Enabled=1` |
 | `1` | **NVIDIA Dynamic MFG.** On/auto requests become `eDynamic`; the runtime picks the multiplier. `TargetFPS=0` follows the monitor's refresh rate. | a runtime reporting Dynamic support (Streamline 2.14.1 verified) |
 | `2` (default) | **Refresh-based fixed count** from the primary display's refresh rate: 2x up to `LowRefreshMaxHz` (60), 3x up to `MediumRefreshMaxHz` (90), 4x above. Counts are configurable per band. | Streamline 2.7+ |
 | `3` | **Experimental governor** (see below): generated frames first, then — in Unreal games — dynamic resolution fills the GPU time left. | Reflex on in the game; Streamline 2.7+ |
@@ -156,6 +162,11 @@ resources while the game has FG off, instead of rebuilding them each time.
 
 ### Advanced keys
 
+Startup conveniences are a separate, GPU-independent [Game Startup](../game_startup/README.md)
+DLL with its own `game_startup.ini`. Install it separately; this proxy loads
+`game_startup.dll` when present beside it. AMD/Proton can use that mod's standalone
+loader without installing DLSS/MFG. No startup settings belong in this INI.
+
 The shipped INI holds only the keys worth tweaking. These also work when added by
 hand (shown with their defaults):
 
@@ -172,6 +183,7 @@ hand (shown with their defaults):
 | | `FollowRefreshRate=1` | Mode 2 re-picks the count when the primary display's refresh rate changes |
 | `[Hooks]` | `WaitTimeoutMs=120000` `LookupDelayMs=10000` `RetryCount=30` `RetryDelayMs=1000` | how long to wait for Streamline and retry hooking |
 | `[Logging]` | `Directory=.` `SampleIntervalMs=10000` | log folder (relative to the INI, environment variables expand); periodic sample interval |
+| `[Cursor]` | `HideWhenIdleMs=0` | hide the mouse cursor over the focused game window after it has been still this long, or at once on gamepad input (XInput: a button, trigger or stick past the deadzone); any mouse movement shows it. 0 = off (no thread runs). Not tied to Streamline |
 
 ### Live reload
 
@@ -185,10 +197,13 @@ and the next request.
 | `TargetFPS`, Mode 2 bands and counts | `[Logging] Directory` |
 | `[ConsoleVariables]` | dlssg_sm86's own `dlssg_sm86.ini` (`Optimized`, the `MaxGeneratedFrames` ceiling) |
 | `[Reload]` itself, `[Logging] Enabled` / `SampleIntervalMs` | a game bootstrap's settings (e.g. AC8 Engine.ini CVars) |
+| `[Cursor] HideWhenIdleMs` while it stays above 0 | `[Cursor]` turned on from 0 |
 
 `IntervalMs=0` reads the file once at launch. If the runtime rejects an override,
-the DLL logs it, retries the game's original request and stops overriding for that
-session.
+the DLL logs it, retries the game's original request and stops overriding until the
+game turns frame generation off (the next on request tries again) or the INI is
+reloaded. Streamline's `eWarnOutOfVRAM` (39) means the extra frames' buffers don't
+fit: free VRAM in the game's settings, then toggle FG.
 
 ## Build
 
@@ -210,10 +225,15 @@ folder:
 
 | Category | Game | Proxy | Bootstrap | Status |
 |---|---|---|---|---|
-| UE5 | [ACE COMBAT 8](games/ue5/ace-combat-8/README.md) | `dinput8.dll` | yes — no FG toggle, DLSS preset bug, dynamic resolution flag | Mode 1 (shipped); Modes 1 and 3 verified live with the current build |
+| UE5 | [ACE COMBAT 8](games/ue5/ace-combat-8/README.md) | `dinput8.dll` | yes — DLSS preset bug, dynamic resolution flag, offline mode: intro skip and online entries hidden | Mode 0 (shipped: Frame Generation row in Settings > Graphics); Modes 1 and 3 verified live with the current build, Mode 2 with an earlier build |
 | UE5 | [Halo: Campaign Evolved](games/ue5/halo-campaign-evolved/README.md) | `winmm.dll` | no | Mode 1 (shipped); Modes 1–3 and live switching verified |
-| UE5 | [Ninja Gaiden 2 Black](games/ue5/ninja-gaiden-2-black/README.md) | `winmm.dll` | no | Mode 1 (shipped; game speed follows its FPS limit — keep it at 30 for 120 Hz); Mode 1 verified live with the current build |
-| UE4 | [The First Berserker: Khazan](games/ue4/the-first-berserker-khazan/README.md) | `winmm.dll` | no | Mode 1 (shipped; Streamline upgraded from 2.4.15); Mode 1 verified live with the current build |
+| UE5 | [Ninja Gaiden 2 Black](games/ue5/ninja-gaiden-2-black/README.md) | `winmm.dll` | no | Mode 0 (shipped: in-game Frame Generation row; game speed follows its FPS limit — keep it at 30 for 120 Hz); Mode 1 verified live with the current build, Mode 2 with an earlier build |
+| UE4 | [The First Berserker: Khazan](games/ue4/the-first-berserker-khazan/README.md) | `winmm.dll` | no | Mode 0 (shipped: in-game Frame Generation setting; Streamline upgraded from 2.4.15); Mode 1 verified live with the current build |
+| UE4 | [Ghostrunner 2](games/ue4/ghostrunner-2/README.md) | `winmm.dll` | no | Mode 0 (shipped: in-game MFG row; Streamline upgraded from 2.2.0); Modes 1 and 2 verified live |
+| Katana | [Dynasty Warriors: Origins](games/katana/dynasty-warriors-origins/README.md) | `winmm.dll` | no | Mode 1 (shipped; when CPU-bound Dynamic stays at 1x–2x and Mode 2 holds 4x; Streamline upgraded from 2.4.10); Modes 1 and 2 verified live |
+| Katana | [Rise of the Ronin](games/katana/rise-of-the-ronin/README.md) | `winmm.dll` (dlssg_sm86 as `dinput8.dll`) | no | Mode 1 (shipped; for Mode 2 the INI sets 3x at 120 Hz, as 4x had worse artifacts for the same fps; Streamline upgraded from 2.4.15); Modes 1 and 2 verified live |
+| UE5 | [Immortals of Aveum](games/ue5/immortals-of-aveum/README.md) | `winmm.dll` | no | Mode 1 (shipped; Streamline upgraded from 2.4.0); Modes 1 and 2 verified live (4x) |
+| Other | [Final Fantasy XVI](games/other/final-fantasy-xvi/README.md) | `winmm.dll` | no | Mode 1 (shipped; Streamline upgraded from 2.4.10); Modes 1 and 2 verified live; on 8 GB GPUs VRAM runs out and it falls back to 2x |
 
 MinHook: https://github.com/TsudaKageyu/minhook/tree/v1.3.4 (BSD, `vendor/minhook/LICENSE.txt`).
 Streamline SDK: https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1.

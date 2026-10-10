@@ -61,9 +61,14 @@ copy /y "%root%README.md" "%release%\" >nul
 
 :: games\ue5\ace-combat-8 bootstrap (no CRT, no frame generation logic)
 set "ac8=%root%games\ue5\ace-combat-8"
+:: Its offline-mode module, loaded into the game by the bootstrap and embedded in it
+cl %cflags% /W4 /WX /wd4505 /EHsc /LD /I"%mh%\include" /Fo"%out%\ac8_offline.obj" "%ac8%\offline\ac8_offline.cpp" %hooks% /link %lflags% /OUT:"%out%\ac8_offline.dll" /IMPLIB:"%out%\ac8_offline.lib" kernel32.lib >nul
+if errorlevel 1 exit /b 1
+rc /nologo /i "%out%" /fo "%out%\ac8_offline.res" "%ac8%\offline\ac8_offline.rc"
+if errorlevel 1 exit /b 1
 cl %cflags% /c /W3 /GS- /Zl /Fo"%out%\start_protected_game.obj" "%ac8%\bootstrap\start_protected_game.c"
 if errorlevel 1 exit /b 1
-link %lflags% /SUBSYSTEM:WINDOWS /ENTRY:entry /NODEFAULTLIB /OUT:"%out%\start_protected_game.exe" "%out%\start_protected_game.obj" kernel32.lib user32.lib
+link %lflags% /SUBSYSTEM:WINDOWS /ENTRY:entry /NODEFAULTLIB /OUT:"%out%\start_protected_game.exe" "%out%\start_protected_game.obj" "%out%\ac8_offline.res" kernel32.lib user32.lib
 if errorlevel 1 exit /b 1
 cl %cflags% /c /W3 /GS- /Zl /Fo"%out%\launcher_test.obj" "%ac8%\bootstrap\tests\launcher_test.c"
 if errorlevel 1 exit /b 1
@@ -79,6 +84,11 @@ copy /y "%out%\proxies\dinput8\dinput8.dll" "%ac8%\mod\Game\Binaries\Win64\" >nu
 copy /y "%out%\proxies\winmm\winmm.dll" "%root%games\ue5\ninja-gaiden-2-black\mod\NINJAGAIDEN2BLACK\Binaries\Win64\" >nul
 copy /y "%out%\proxies\winmm\winmm.dll" "%root%games\ue5\halo-campaign-evolved\mod\Meteorite\Binaries\Win64\" >nul
 copy /y "%out%\proxies\winmm\winmm.dll" "%root%games\ue4\the-first-berserker-khazan\mod\BBQ\Binaries\Win64\" >nul
+copy /y "%out%\proxies\winmm\winmm.dll" "%root%games\katana\dynasty-warriors-origins\mod\" >nul
+copy /y "%out%\proxies\winmm\winmm.dll" "%root%games\other\final-fantasy-xvi\mod\" >nul
+copy /y "%out%\proxies\winmm\winmm.dll" "%root%games\katana\rise-of-the-ronin\mod\" >nul
+copy /y "%out%\proxies\winmm\winmm.dll" "%root%games\ue5\immortals-of-aveum\mod\P3\Binaries\Win64\" >nul
+copy /y "%out%\proxies\winmm\winmm.dll" "%root%games\ue4\ghostrunner-2\mod\Ghostrunner2\Binaries\Win64\" >nul
 echo Built %release% and refreshed every game's mod folder; all tests passed.
 exit /b 0
 
@@ -88,5 +98,5 @@ ml64 /nologo /c /Fo"%dir%\proxy_stubs.obj" "%dir%\proxy.asm" >nul
 if errorlevel 1 exit /b 1
 cl %cflags% /c /W4 /WX /EHsc /I"%dir%" /Fo"%dir%\proxy_forward.obj" "%src%\proxy_forward.cpp" >nul
 if errorlevel 1 exit /b 1
-link %lflags% /DLL /DEF:"%dir%\proxy.def" /OUT:"%dir%\%1.dll" /IMPLIB:"%dir%\proxy.lib" "%out%\dlss_mfg_sm86.obj" "%dir%\proxy_forward.obj" "%dir%\proxy_stubs.obj" %hooks% kernel32.lib user32.lib version.lib >nul
+link %lflags% /DLL /DEF:"%dir%\proxy.def" /OUT:"%dir%\%1.dll" /IMPLIB:"%dir%\proxy.lib" "%out%\dlss_mfg_sm86.obj" "%dir%\proxy_forward.obj" "%dir%\proxy_stubs.obj" %hooks% kernel32.lib user32.lib >nul
 exit /b %errorlevel%

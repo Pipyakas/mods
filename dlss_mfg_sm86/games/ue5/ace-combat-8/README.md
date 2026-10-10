@@ -1,8 +1,15 @@
 # ACE COMBAT 8
 
-AC8 has no in-game frame generation toggle, its DLSS quality dropdown is off by
-one, and its renderer never enables UE dynamic resolution. Its bootstrap fixes all
-three; MFG itself comes from the core DLL like any game.
+AC8 has no in-game frame generation setting, its DLSS quality dropdown is off by
+one, and its renderer never enables UE dynamic resolution. The bootstrap fixes the
+last two. The core DLL (`dinput8.dll`) provides MFG and adds a **Frame Generation**
+row (Off / 2x / 3x / 4x / Auto) to Settings > Graphics, applied with the game's
+"Apply them?" confirmation; with `Mode=0` that row decides. The row is the
+consoles' unused graphics-mode option: the game shows and saves its raw value
+(`LiveSystemSaveGame.GraphicsData.GraphicsMode`), the INI's choice is written
+there while Settings is closed, and the value there once Settings has closed and
+"Apply them?" has been answered is applied. Not in the mission pause menu (its
+list has no free row, and the main menu's System pages do not run there).
 
 ## Install (manual)
 
@@ -11,7 +18,7 @@ Back up every file you replace first.
 
 | Copy | To | What |
 |---|---|---|
-| `mod\start_protected_game.exe` | `start_protected_game.exe` | bootstrap — replaces the game's launcher stub |
+| `mod\start_protected_game.exe` | `start_protected_game.exe` | bootstrap — replaces the game's launcher stub (carries the offline-mode module) |
 | `mod\ac8_bootstrap.ini` | `ac8_bootstrap.ini` | bootstrap settings |
 | `mod\Game\Binaries\Win64\dinput8.dll` | `Game\Binaries\Win64\` | dlss_mfg_sm86 proxy |
 | `mod\Game\Binaries\Win64\dlss_mfg_sm86.ini` | `Game\Binaries\Win64\` | MFG mode |
@@ -35,8 +42,8 @@ Requirements:
 - `FixDLSSPresets` — patches the 7 `PerfQualityValue` call sites in memory so every
   DLSS dropdown entry maps to its real render scale. A game update that moves the
   code disables the patch instead of corrupting it.
-- `[ConsoleVariables]` → Engine.ini: `r.Streamline.DLSSG.Enable` (the only FG
-  switch AC8 has), the fallback `FramesToGenerate`, Reflex mode, any other CVar.
+- `[ConsoleVariables]` → Engine.ini: `r.Streamline.DLSSG.Enable` (keep it at 1: the
+  in-game row's Off works through the core DLL), the fallback `FramesToGenerate`, Reflex mode, any other CVar.
   `key=@remove` deletes a key. `RemoveScreenPercentage` drops fixed render-scale
   overrides so the DLSS preset controls it.
 - `[SM86.*]` → `Game\Binaries\Win64\dlssg_sm86.ini` (section name without the prefix).
@@ -48,10 +55,40 @@ Requirements:
   `FDefaultDynamicResolutionState::IsSupported`, which returns it — verifying that
   function's bytes first, so a game update skips the fix — and sets it once the game
   runs. A data write, not a code patch.
+- Offline mode (the bootstrap starts the game without Easy Anti-Cheat). Two
+  conveniences need code inside the game: a module (`offline/ac8_offline.cpp`,
+  built as a DLL) is embedded in the exe, which maps it into the suspended game's
+  memory itself (no file is written or loaded by name) and starts it with an
+  APC on the game's main thread, before the game's own code. The keys reach it
+  as environment variables (`AC8_BOOTSTRAP_SKIP_INTRO`,
+  `AC8_BOOTSTRAP_HIDE_ONLINE_MENU`); its log is
+  `Game\Binaries\Win64\ac8_offline.log`.
+  - `SkipIntro` — the logo/legal notice screens and the title screen ("PRESS THE
+    ENTER KEY") are skipped and the main menu appears without its fade-in. The
+    game's own sign-in step opens where the title would, so it signs in and loads
+    the save as after that key press. Data edits made before the game uses them:
+    the notice list, the title's menu-table entry, three animations' ranges. The
+    shader preparation screen and the ~4 s sign-in background stay.
+  - `HideOnlineMenu` — ACE COMBAT ONLINE and ACE COMBAT STORE (greyed out for
+    good offline) are hidden by the game itself: just before the main menu's list
+    is created (its `OnInitialized`, through a ProcessEvent hook), their rows in
+    `DT_LiveMenuMainTopCommands` get a feature the game never unlocks with
+    `InvalidAppearance=Invisible` — how it hides CAMPAIGN TRAINING until unlocked
+    — and their `StringArgs` ("Online", "Store", which grey a row out whatever
+    else it says) are emptied. The game builds a four-row menu with its own
+    keyboard, gamepad and mouse navigation and descriptions.
+- `[Debug] UE4SS=1` — loads UE4SS from `Game\Binaries\Win64\ue4ss\UE4SS.dll`
+  (installed separately, without its `dwmapi.dll` proxy) for inspecting the game
+  during mod work. Off by default.
+- `[Debug] AgentControl=1` — lets a tool drive the game while it runs in the
+  background, through `\\.\pipe\ac8_agent` (`offline/agent_control.cpp`: keys,
+  virtual mouse, virtual XInput pad). The game is kept believing it is in front,
+  so it takes that input and keeps frame generation on; the menus act on the
+  pad, not on keyboard messages. Off by default.
 
-It injects no code beyond the preset patch and has no frame generation logic;
-`dlss_mfg_sm86.ini` decides the mode. With Mode 0, the game uses `FramesToGenerate`
-from the bootstrap INI.
+Besides the preset patch, that module and (when asked) UE4SS it injects no code
+and has no frame generation logic; `dlss_mfg_sm86.ini` decides the mode. With
+Mode 0, the in-game row decides.
 
 ## Mode 3 with dynamic resolution
 
@@ -73,8 +110,9 @@ in the heaviest scenes the 50% floor needs 33.5–35 ms, ~107–114 fps.
 ## Check after launch
 
 - `Game\Binaries\Win64\dlss_mfg_sm86.log`: `Streamline game, engine=Unreal`,
-  `Start Mode=1 ...` (the shipped INI uses Dynamic MFG), then `Hook ... MH_OK` for
-  both functions and `dynamicOverride=1` once frame generation starts. In Mode 3:
+  `Start Mode=1 ...`, then `Hook ... MH_OK` for both functions and `dynamicOverride=1`
+  once frame generation starts (verified live: Dynamic ran mostly 4x; `override=1` in
+  Mode 2). In Mode 3:
   `Mode3 found r.DynamicRes...` and `resolution=driven`.
 - `Game\Binaries\Win64\dlssg_sm86\logs\backend_<pid>.jsonl`: `"multi_frame_count":3`
   for 4x.
