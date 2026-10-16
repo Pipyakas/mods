@@ -20,7 +20,7 @@ Back up every file you replace first.
 | `mod\winmm.dll` | game folder | dlss_mfg_sm86 proxy |
 | `mod\dlss_mfg_sm86.ini` | game folder | MFG mode (Mode 1, Dynamic MFG; Mode 2 for CPU-bound systems) |
 | `mod\dlssg_sm86.ini` | game folder | dlssg_sm86 settings (`Optimized=3`, 4x ceiling) |
-| `version.dll` from the [dlssg_for_sm86](../../../../externals/dlssg_for_sm86/version.dll) | game folder | dlssg_sm86 itself |
+| `version.dll`, `dlssg_sm86.ini` and the `dlssg_sm86\` folder from [dlssg_for_sm86](../../../../externals/dlssg_for_sm86) | game folder | dlssg_sm86 0.4.0 itself (`dlssg_sm86\` carries the runtime, backend and kernel packs; `sr\` adds the INT8 super-resolution) |
 | Streamline SDK 2.14.1 `bin\x64`: `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.dlss.dll`, `sl.pcl.dll`, `sl.reflex.dll`, `nvngx_dlssg.dll` | `dll\release\` | **required**: the game ships 2.4.10, which has no multi-frame code ([Katana notes](../README.md)) |
 
 `DWORIGINS.exe` statically imports both `version` and `winmm`.

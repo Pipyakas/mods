@@ -17,7 +17,8 @@ console-variable features: Mode 3 dynamic resolution and `[ConsoleVariables]`.
    `dist\dlss_mfg_sm86.zip` package).
 2. Put both next to the game's rendering EXE — for Unreal games
    `<Game>\<Project>\Binaries\Win64\`, the folder with `<Project>-Win64-Shipping.exe`
-   (or the main EXE) and usually dlssg_sm86's `version.dll`.
+   (or the main EXE). dlssg_sm86 0.4.0 lives there too: its proxy (usually
+   `version.dll`), `dlssg_sm86.ini` and the `dlssg_sm86\` folder beside them.
 3. If the game already has a `winmm.dll` there, use `dinput8.dll` or `dbghelp.dll`
    instead, or one from `alternatives\`. Back up any file you replace.
 4. Start the game with frame generation on. `dlss_mfg_sm86.log` beside the INI

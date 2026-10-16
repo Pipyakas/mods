@@ -14,7 +14,7 @@ Back up every file you replace first.
 |---|---|---|
 | `mod\Meteorite\Binaries\Win64\winmm.dll` | `Meteorite\Binaries\Win64\` | dlss_mfg_sm86 proxy |
 | `mod\Meteorite\Binaries\Win64\dlss_mfg_sm86.ini` | `Meteorite\Binaries\Win64\` | MFG mode |
-| `version.dll` + `dlssg_sm86.ini` from the [dlssg_for_sm86](../../../../externals/dlssg_for_sm86/version.dll) | `Meteorite\Binaries\Win64\` | dlssg_sm86 itself |
+| `version.dll`, `dlssg_sm86.ini` and the `dlssg_sm86\` folder from [dlssg_for_sm86](../../../../externals/dlssg_for_sm86) | `Meteorite\Binaries\Win64\` | dlssg_sm86 0.4.0 itself (`dlssg_sm86\` carries the runtime, backend and kernel packs; `sr\` adds the INT8 super-resolution) |
 
 - **Proxy name.** `HaloCampaignEvolved.exe` statically imports `winmm`, `version` and
   `dxgi`; `version.dll` is dlssg_sm86's, so the proxy is `winmm.dll`.

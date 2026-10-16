@@ -14,7 +14,7 @@ Back up every file you replace first.
 | `mod\P3\Binaries\Win64\winmm.dll` | `P3\Binaries\Win64\` | dlss_mfg_sm86 proxy |
 | `mod\P3\Binaries\Win64\dlss_mfg_sm86.ini` | `P3\Binaries\Win64\` | MFG mode (Mode 1, Dynamic MFG) |
 | `mod\P3\Binaries\Win64\dlssg_sm86.ini` | `P3\Binaries\Win64\` | dlssg_sm86 settings (`Optimized=3`, 4x ceiling) |
-| `version.dll` from the [dlssg_for_sm86](../../../../externals/dlssg_for_sm86/version.dll) | `P3\Binaries\Win64\` | dlssg_sm86 itself |
+| `version.dll`, `dlssg_sm86.ini` and the `dlssg_sm86\` folder from [dlssg_for_sm86](../../../../externals/dlssg_for_sm86) | `P3\Binaries\Win64\` | dlssg_sm86 0.4.0 itself (`dlssg_sm86\` carries the runtime, backend and kernel packs; `sr\` adds the INT8 super-resolution) |
 | Streamline SDK 2.14.1 `bin\x64`: the eight runtime DLLs | `Engine\Plugins\Runtime\Nvidia\Streamline\Binaries\ThirdParty\Win64\` | **required**: the game ships 2.4.0, which has no multi-frame code ([UE5 notes](../README.md)) |
 
 `ImmortalsOfAveum-Win64-Shipping.exe` statically imports `version`, `winmm` and `dxgi`.

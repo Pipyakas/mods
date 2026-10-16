@@ -8,6 +8,7 @@ under [`externals/`](externals).
 |---|---|
 | [`dlss_mfg_sm86/`](dlss_mfg_sm86/README.md) | Dynamic multi-frame generation on top of dlssg_sm86, for any Streamline DLSS-G game, with per-game mods (ACE COMBAT 8, Halo: Campaign Evolved, Ninja Gaiden 2 Black, ...) under [`games/`](dlss_mfg_sm86/games) |
 | [`game_startup/`](game_startup/README.md) | Startup fixes loaded through a proxy DLL (Immortals of Aveum) |
+| [`forza_horizon_3/`](forza_horizon_3/README.md) | Forza Horizon 3 startup-crash fix on multi-GPU machines (one-byte TargetHardwareProfiler.dll patch) |
 | [`externals/dlssg_for_sm86/`](https://github.com/sdli1995/dlssg_for_sm86) | [sdli1995/dlssg_for_sm86](https://github.com/sdli1995/dlssg_for_sm86): DLSS Frame Generation on RTX 30 (SM86) and RTX 20 (SM75), which dlss_mfg_sm86 needs (`version.dll`, `alternatives\`, [INI reference](externals/dlssg_for_sm86/docs/INSTALL.en.md)) |
 
 ## dlss_mfg_sm86
@@ -28,7 +29,8 @@ It works in any Streamline DLSS-G game with a generic drop-in install; Unreal
 games also get dynamic resolution and console-variable pins. Games that need more
 (an FG switch, a newer Streamline runtime, a bug fix) are grouped by engine, and
 each has a copy-ready `mod/` folder with its working files, including its
-`dlssg_sm86` settings (`Optimized=3`, the fastest tier). Installation is manual.
+`dlssg_sm86` settings (`Optimized=3`, the FG Lite `Preset=C` and the INT8
+super-resolution route). Installation is manual.
 
 ## Externals
 
